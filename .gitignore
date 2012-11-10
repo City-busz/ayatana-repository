@@ -1,0 +1,10 @@
+*.log
+*.xz
+*.sig
+*.gz
+*.bz2
+*.zip
+*.7z
+*.run
+*~
+src
