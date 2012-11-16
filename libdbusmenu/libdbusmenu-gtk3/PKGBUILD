@@ -19,7 +19,7 @@ build() {
   sed -i 's@^#!.*python$@#!/usr/bin/python2@' tools/dbusmenu-bench
 
   ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --libexecdir=/usr/lib/$pkgname \
-               --disable-static
+               --disable-static --disable-dumper
   make
 }
 
