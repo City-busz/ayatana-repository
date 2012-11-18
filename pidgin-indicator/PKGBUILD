@@ -1,0 +1,46 @@
+# Maintainer: György Balló <ballogy@freestart.hu>
+
+pkgname=pidgin-indicator
+_pkgname=pidgin-libnotify
+pkgver=0.14
+pkgrel=4
+pkgdesc="Pidgin plugin that enables popups when someone logs in or messages you"
+arch=('i686' 'x86_64')
+url="https://launchpad.net/ubuntu/+source/pidgin-libnotify"
+license=('GPL')
+depends=('libnotify' 'indicator-messages' 'pidgin')
+makedepends=('intltool')
+options=('!libtool')
+conflicts=('pidgin-libnotify')
+source=(http://downloads.sourceforge.net/sourceforge/gaim-libnotify/$_pkgname-$pkgver.tar.gz
+        force-load.patch
+        best_name.patch
+        replace-pidgin-action-requests.diff
+        ubuntu_notify_support.patch
+        messaging_menu.patch)
+md5sums=('bfb5368b69c02d429b2b17c00a6673c0'
+         '13530ab6e2639f3d7bb26d6a20ebc9d0'
+         '8d7aa6988d359eb0d916e6ee073e29be'
+         '32aae976e57d672115c368679394230e'
+         'aa07fda96540f6fb8757711ced521b26'
+         'a9195fa36260d51c1c93ffd45c966b70')
+
+build() {
+  cd "$srcdir/$_pkgname-$pkgver"
+  patch -Np1 -i "$srcdir/force-load.patch"
+  patch -Np1 -i "$srcdir/best_name.patch"
+  patch -Np1 -i "$srcdir/replace-pidgin-action-requests.diff"
+  patch -Np1 -i "$srcdir/ubuntu_notify_support.patch"
+  patch -Np1 -i "$srcdir/messaging_menu.patch"
+
+  autoreconf -fi
+  ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
+              --disable-static
+  make
+}
+
+package() {
+  cd "$srcdir/$_pkgname-$pkgver"
+
+  make DESTDIR="$pkgdir/" install
+}
