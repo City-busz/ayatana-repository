@@ -46,7 +46,4 @@ package() {
   emid=$(sed -n '/.*<em:id>\(.*\)<\/em:id>.*/{s//\1/p;q}' install.rdf)
   install -d "$pkgdir/usr/lib/thunderbird/extensions/$emid"
   unzip -d "$pkgdir/usr/lib/thunderbird/extensions/$emid" messagingmenu.xpi
-
-  mkdir -p $pkgdir/usr/share/indicators/messages/applications
-  echo '/usr/share/applications/thunderbird.desktop' > $pkgdir/usr/share/indicators/messages/applications/thunderbird
 }
