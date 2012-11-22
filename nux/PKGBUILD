@@ -2,12 +2,12 @@
 
 pkgname=nux
 pkgver=3.10.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Graphical user interface toolkit for applications that mixes OpenGL hardware acceleration with high quality visual rendering"
 arch=('i686' 'x86_64')
 url="https://launchpad.net/nux"
 license=('LGPL')
-depends=('libsigc++' 'glew' 'ibus' 'pciutils')
+depends=('libsigc++' 'glew' 'ibus' 'pciutils' 'geis')
 makedepends=('mesa' 'boost')
 options=('!libtool')
 source=(http://launchpad.net/$pkgname/3.0/${pkgver%.*}/+download/$pkgname-$pkgver.tar.gz)
