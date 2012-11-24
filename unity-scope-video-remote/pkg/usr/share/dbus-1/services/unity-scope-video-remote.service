@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=net.launchpad.scope.RemoteVideos
+Exec=/usr/lib/unity-scope-video-remote/unity-scope-video-remote

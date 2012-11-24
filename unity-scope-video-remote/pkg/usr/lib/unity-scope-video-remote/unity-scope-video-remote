@@ -1,0 +1,478 @@
+#! /usr/bin/python
+# -*- coding: utf-8 -*-
+
+#    Copyright (c) 2011 David Calle <davidc@framli.eu>
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""The unity remote videos scope."""
+
+import json
+import sys
+from urllib import urlencode
+import time
+from datetime import datetime
+import gettext
+
+#pylint: disable=E0611
+from zeitgeist.client import ZeitgeistClient
+from zeitgeist.datamodel import (
+    Event, 
+    Subject, 
+    Interpretation, 
+    Manifestation,
+)
+
+from gi.repository import (
+    GLib,
+    GObject,
+    Gio,
+    Unity,
+    Soup,
+    SoupGNOME,
+)
+#pylint: enable=E0611
+
+APP_NAME = "unity-lens-video"
+LOCAL_PATH = "/usr/share/locale/"
+
+gettext.bindtextdomain(APP_NAME, LOCAL_PATH)
+gettext.textdomain(APP_NAME)
+_ = gettext.gettext
+n_ = gettext.ngettext
+
+CAT_INDEX_ONLINE = 1
+CAT_INDEX_MORE = 2
+
+BUS_NAME = "net.launchpad.scope.RemoteVideos"
+SERVER = "http://videosearch.ubuntu.com/v0"
+
+REFRESH_INTERVAL = 3600         # fetch sources & recommendations once an hour
+RETRY_INTERVAL = 60             # retry sources/recommendations after a minute
+
+# Be cautious with Zeitgeist, don't assume it's ready
+try:
+    ZGCLIENT = ZeitgeistClient()
+    # Creation of the Zg data source
+    ZGCLIENT.register_data_source("98898", "Unity Videos lens",
+        "",[Event.new_for_values(actor="lens://unity-lens-video")])
+except:
+    print "Unable to connect to Zeitgeist, won't send events."
+    ZGCLIENT = None
+
+class Daemon:
+
+    """Create the scope and listen to Unity signals"""
+
+    def __init__(self):
+        self._pending = None
+        self.sources_list = []
+        self.recommendations = []
+        self.scope = Unity.Scope.new("/net/launchpad/scope/remotevideos")
+        self.scope.search_in_global = False
+        self.scope.connect("search-changed", self.on_search_changed)
+        self.scope.connect("filters-changed", self.on_filtering_or_preference_changed)
+        self.scope.props.sources.connect("notify::filtering",
+            self.on_filtering_or_preference_changed)
+        self.scope.connect("activate-uri", self.on_activate_uri)
+        self.scope.connect("preview-uri", self.on_preview_uri)
+        self.scope.connect("generate-search-key", lambda scope, search: search.props.search_string.strip())
+        self.session = Soup.SessionAsync()
+        self.session.props.user_agent = "Unity Video Lens Remote Scope v0.4"
+        self.session.add_feature_by_type(SoupGNOME.ProxyResolverGNOME)
+        self.preferences = Unity.PreferencesManager.get_default()
+        self.query_list_of_sources()
+        self.update_recommendations()
+        self.preferences.connect("notify::remote-content-search", self.on_filtering_or_preference_changed)
+        self.scope.export()
+        # refresh the at least once every 30 minutes
+        GLib.timeout_add_seconds(REFRESH_INTERVAL/2, self.refresh_online_videos)
+
+    def update_recommendations(self):
+        """Query the server for 'recommendations'.
+
+        In v0 extended, that means simply do an empty search with Amazon
+        as the source since it's the only paid provider at the moment.
+        """
+        if self.preferences.props.remote_content_search != Unity.PreferencesManagerRemoteContent.ALL:
+            return
+        msg = Soup.Message.new("GET", SERVER + "/search?q=&sources=Amazon")
+        self.session.queue_message(msg, self._recs_cb, None)
+
+    def _recs_cb(self, session, msg, user_data):
+        recs = self._handle_search_msg(msg)
+        print "Got %d recommendations from the server" % len(recs)
+        if recs:
+            self.recommendations = recs
+            dt = REFRESH_INTERVAL
+        else:
+            dt = RETRY_INTERVAL
+        GLib.timeout_add_seconds(dt, self.update_recommendations)
+
+    def query_list_of_sources(self):
+        """Query the server for a list of sources that will be used
+        to build sources filter options and search queries."""
+        if self.preferences.props.remote_content_search != Unity.PreferencesManagerRemoteContent.ALL:
+            return
+        msg = Soup.Message.new("GET", SERVER + "/sources")
+        self.session.queue_message(msg, self._sources_cb, None)
+
+    def _sources_cb(self, session, msg, user_data):
+        if msg.status_code != 200:
+            print "Error: Unable to query the server for a list of sources"
+            print "       %d: %s" % (msg.status_code, msg.reason_phrase)
+        else:
+            try:
+                sources_list = json.loads(msg.response_body.data)
+            except ValueError:
+                print "Error: got garbage json from the server"
+            else:
+                if isinstance(sources_list, dict):
+                    sources_list = sources_list.get('results', [])
+                if sources_list and sources_list != self.sources_list:
+                    self.sources_list = sources_list
+                    sources = self.scope.props.sources
+                    for opt in sources.options[:]:
+                        sources.remove_option(opt.props.id)
+                    for source in self.sources_list:
+                        sources.add_option(source, source, None)
+        if self.sources_list:
+            # refresh later
+            dt = REFRESH_INTERVAL
+        else:
+            # retry soon
+            dt = RETRY_INTERVAL
+        GLib.timeout_add_seconds(dt, self.query_list_of_sources)
+
+    def on_filtering_or_preference_changed(self, *_):
+        """Run another search when a filter or preference change is notified."""
+        self.scope.queue_search_changed(Unity.SearchType.DEFAULT)
+
+    def refresh_online_videos(self, *_):
+        """ Periodically refresh the results """
+        self.scope.queue_search_changed(Unity.SearchType.DEFAULT)
+        return True
+
+    def source_activated(self, source):
+        """Return the state of a sources filter option."""
+        active = self.scope.props.sources.get_option(source).props.active
+        filtering = self.scope.props.sources.props.filtering
+        if (active and filtering) or (not active and not filtering):
+            return True
+        else:
+            return False
+            
+    def at_least_one_source_is_on(self, sources):
+        """Return a general activation state of all sources of this scope.
+        This is needed, because we don't want to show recommends if an option
+        from another scope is the only one activated"""
+        filtering = self.scope.props.sources.props.filtering
+        if filtering and len(sources) > 0 or not filtering:
+            return True
+        else:
+            return False
+
+    def on_search_changed(self, scope, search, search_type, _):
+        """Get the search string, prepare a list of activated sources for 
+        the server, update the model and notify the lens when we are done."""
+        search_string = search.props.search_string.strip()
+        # note search_string is a utf-8 encoded string, now:
+        print "Remote scope search changed to %r" % search_string
+        model = search.props.results_model
+        # Clear results details map
+        model.clear()
+
+        # only perform the request if the user has not disabled
+        # online/commercial suggestions. That will hide the category as well.
+        if self.preferences.props.remote_content_search != Unity.PreferencesManagerRemoteContent.ALL:
+            search.finished()
+            return
+
+        # Create a list of activated sources
+        sources = [source for source in self.sources_list
+                   if self.source_activated(source)]
+        # If all the sources are activated, don't bother
+        # passing them as arguments
+        if len(sources) == len(self.sources_list):
+            sources = ''
+        else:
+            sources = ','.join(sources)
+        working = False
+        # Ensure that we are not in Global search
+        if search_type is Unity.SearchType.DEFAULT: 
+            if self.at_least_one_source_is_on(sources):
+                self.get_results(search_string, search, model, sources)
+                working = True
+        if search and not working:
+            search.finished()
+
+    def update_results_model(self, search, model, results, is_treat_yourself=False):
+        """Run the search method and check if a list of sources is present.
+        This is useful when coming out of a network issue."""
+        if isinstance(results, dict):
+            self.process_result_array(results['other'], model, CAT_INDEX_ONLINE)
+            self.process_result_array(results['treats'], model, CAT_INDEX_MORE)
+        else:
+            category = CAT_INDEX_MORE if is_treat_yourself else CAT_INDEX_ONLINE
+            self.process_result_array(results, model, category)
+
+        if search:
+            search.finished()
+        if self.sources_list == []:
+            self.query_list_of_sources()
+
+    def process_result_array(self, results, model, category):
+        """Run the search method and check if a list of sources is present.
+        This is useful when coming out of a network issue."""
+        for i in results:
+            try:
+                uri = i['url'].encode('utf-8')
+                title = i['title'].encode('utf-8')
+                icon = i['img'].encode('utf-8')
+                result_icon = icon
+                comment = i['source'].encode('utf-8')
+                details_url = ""
+                if "details" in i:
+                    details_url = i['details'].encode('utf-8')
+                if category == CAT_INDEX_MORE:
+                    price = None
+                    price_key = 'formatted_price'
+                    if price_key in i:
+                        price = i[price_key]
+                    if not price or price == 'free':
+                        price = _('Free')
+                    anno_icon = Unity.AnnotatedIcon.new(Gio.FileIcon.new(Gio.File.new_for_uri(result_icon)))
+                    anno_icon.props.category = Unity.CategoryType.MOVIE
+                    anno_icon.props.ribbon = price
+                    result_icon = anno_icon.to_string()
+
+                if uri.startswith('http'):
+                    # Instead of an uri, we pass a string of uri + metadata
+                    fake_uri = "%slens-meta://%slens-meta://%slens-meta://%s"
+                    fake_uri = fake_uri % (uri, title, icon, details_url)
+                    model.append(fake_uri,
+                        result_icon, category, "text/html",
+                        str(title), str(comment), str(uri))
+            except (KeyError, TypeError, AttributeError) as detail:
+                print "Malformed result, skipping.", detail
+
+    def get_results(self, search_string, search, model, sources):
+        """Query the server with the search string and the list of sources."""
+        if not search_string and not sources and self.recommendations:
+            self.update_results_model(search, model, self.recommendations, True)
+            return
+        if self._pending is not None:
+            self.session.cancel_message(self._pending,
+                                        Soup.KnownStatusCode.CANCELLED)
+        query = dict(q=search_string)
+        query['split'] = 'true'
+        if sources:
+            query['sources'] = sources.encode("utf-8")
+        query = urlencode(query)
+        url = "%s/search?%s" % (SERVER, query)
+        print "Querying the server:", url
+        self._pending = Soup.Message.new("GET", url)
+        self.session.queue_message(self._pending,
+                                   self._search_cb,
+                                   (search, model))
+
+    def _search_cb(self, session, msg, (search, model)):
+        if msg is not self._pending:
+            # nothing to do here
+            print "WAT? _search_cb snuck in on a non-pending msg"
+            return
+        self._pending = None
+        results = self._handle_search_msg(msg)
+        self.update_results_model(search, model, results)
+
+    def _handle_search_msg(self, msg):
+        results = []
+        if msg.status_code != 200:
+            print "Error: Unable to get results from the server"
+            print "       %d: %s" % (msg.status_code, msg.reason_phrase)
+        else:
+            try:
+                results = json.loads(msg.response_body.data)
+            except ValueError:
+                print "Error: got garbage json from the server"
+        if isinstance(results, dict) and 'results' in results:
+            results = results.get('results', [])
+        return results
+
+
+    def on_activate_uri (self, scope, rawuri):
+        """On item clicked, parse the custom uri items"""
+        # Parse the metadata before passing the whole to Zg
+        uri = rawuri.split('lens-meta://')[0]
+        title = rawuri.split('lens-meta://')[1]
+        icon = rawuri.split('lens-meta://')[2]
+        if ZGCLIENT:
+            self.zeitgeist_insert_event(uri, title, icon)
+        # Use direct glib activation instead of Unity's own method
+        # to workaround an ActivationResponse bug.
+        GLib.spawn_async(["/usr/bin/gvfs-open", uri])
+        # Then close the Dash
+        return Unity.ActivationResponse(goto_uri='', handled=2 )
+
+    def on_preview_uri (self, scope, rawuri):
+        """Preview request handler"""
+        details_url = rawuri.split('lens-meta://')[3]
+        details = self.get_details(details_url)
+
+        title = rawuri.split('lens-meta://')[1]
+        thumbnail_uri = rawuri.split('lens-meta://')[2]
+        subtitle = ''
+        desc = ''
+        source = ''
+        if isinstance(details, dict):
+            title = details['title']
+            thumbnail_uri = details['image']
+            desc = details['description']
+            source = details['source']
+
+        try:
+            thumbnail_file = Gio.File.new_for_uri (thumbnail_uri)
+            thumbnail_icon = Gio.FileIcon.new(thumbnail_file)
+        except:
+            thumbnail_icon = None
+        
+        release_date = None
+        duration = 0
+            
+        if "release_date" in details:
+            try:
+                # v1 spec states release_date will be YYYY-MM-DD
+                release_date = datetime.strptime(details["release_date"], "%Y-%m-%d")
+            except ValueError:
+                print "Failed to parse release_date since it was not in format: YYYY-MM-DD"
+
+        if "duration" in details:
+            # Given in seconds, convert to minutes
+            duration = int(details["duration"]) / 60
+        
+        if release_date != None:
+            subtitle = release_date.strftime("%Y")
+        if duration > 0:
+            d = n_("%d min", "%d mins", duration) % duration
+            if len(subtitle) > 0:
+                subtitle += ", " + d
+            else:
+                subtitle = d
+            
+        preview = Unity.MoviePreview.new(title, subtitle, desc, thumbnail_icon)
+        play_video = Unity.PreviewAction.new("play", _("Play"), None)
+        play_video.connect('activated', self.play_video)
+        preview.add_action(play_video)
+        # For now, rating == -1 and num_ratings == 0 hides the rating widget from the preview
+        preview.set_rating(-1, 0)
+
+        # TODO: For details of future source types, factor out common detail key/value pairs
+        if "directors" in details:
+            directors = details["directors"]
+            preview.add_info(Unity.InfoHint.new("directors",
+                n_("Director", "Directors", len(directors)), None, ', '.join(directors)))
+        if "starring" in details:
+            cast = details["starring"]
+            if cast:
+                preview.add_info(Unity.InfoHint.new("cast",
+                    n_("Cast", "Cast", len(cast)), None, ', '.join(cast)))
+        if "genres" in details:
+            genres = details["genres"] 
+            if genres:
+                preview.add_info(Unity.InfoHint.new("genres",
+                    n_("Genre", "Genres", len(genres)), None, ', '.join(genres)))
+        # TODO: Add Vimeo & YouTube details for v1 of JSON API
+        if "uploaded_by" in details:
+            preview.add_info(Unity.InfoHint.new("uploaded-by", _("Uploaded by"),
+                None, details["uploaded_by"]))
+        if "date_uploaded" in details:
+            preview.add_info(Unity.InfoHint.new("uploaded-on", _("Uploaded on"),
+                None, details["date_uploaded"]))
+
+        return preview
+
+    def get_details(self, details_url):
+        """Get online video details for preview"""
+        details = []
+        if len(details_url) == 0:
+            print "Cannot get preview details, no details_url specified."
+            return details
+
+        if self._pending is not None:
+            self.session.cancel_message(self._pending,
+                                        Soup.KnownStatusCode.CANCELLED)
+
+        self._pending = Soup.Message.new("GET", details_url)
+        # Send a synchronous GET request for video metadata details
+        self.session.send_message(self._pending)
+        try:
+            details = json.loads(self._pending.response_body.data)
+        except ValueError:
+            print "Error: got garbage json from the server"
+        except TypeError:
+            print "Error: failed to connect to videosearch server to retrieve details."
+
+        return details
+
+    def play_video (self, action, uri):
+        """Preview request - Play action handler"""
+        return self.on_activate_uri (action, uri)
+
+    def zeitgeist_insert_event(self, uri, title, icon):
+        """Insert item uri as a new Zeitgeist event"""
+        # "storage" is an optional zg string 
+        # we use is to host the icon link. 
+        # Storing it another way and referring to it lens side
+        # would be more elegant but much more expensive.
+        subject = Subject.new_for_values(
+            uri = uri,
+            interpretation=unicode(Interpretation.VIDEO),
+            manifestation=unicode(Manifestation.FILE_DATA_OBJECT.REMOTE_DATA_OBJECT),
+            origin=uri,
+            storage=icon,
+            text = title)
+        event = Event.new_for_values(
+            timestamp=int(time.time()*1000),
+            interpretation=unicode(Interpretation.ACCESS_EVENT),
+            manifestation=unicode(Manifestation.USER_ACTIVITY),
+            actor="lens://unity-lens-video",
+            subjects=[subject,])
+        ZGCLIENT.insert_event(event)
+
+def main():
+    """Connect to the session bus, exit if there is a running instance."""
+    try:
+        session_bus_connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        session_bus = Gio.DBusProxy.new_sync(session_bus_connection, 0, None,
+                                                'org.freedesktop.DBus',
+                                                '/org/freedesktop/DBus',
+                                                'org.freedesktop.DBus', None)
+        result = session_bus.call_sync('RequestName',
+                                        GLib.Variant("(su)", (BUS_NAME, 0x4)),
+                                        0, -1, None)
+
+        # Unpack variant response with signature "(u)". 1 means we got it.
+        result = result.unpack()[0]
+
+        if result != 1:
+            print >> sys.stderr, "Failed to own name %s. Bailing out." % BUS_NAME
+            raise SystemExit(1)
+    except:
+        raise SystemExit(1)
+
+    Daemon()
+    GObject.MainLoop().run()
+
+if __name__ == "__main__":
+    main()
