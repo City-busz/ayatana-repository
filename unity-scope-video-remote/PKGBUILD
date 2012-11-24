@@ -3,9 +3,9 @@
 pkgname=unity-scope-video-remote
 pkgver=0.3.10
 pkgrel=1
-pkgdesc="Lens for Unity to search local and remote videos "
+pkgdesc="Videos Lens scope for online sources"
 arch=('any')
-url="Videos Lens scope for online sources"
+url="https://launchpad.net/unity-scope-video-remote"
 license=('GPL')
 depends=('unity-lens-video' 'libsoup-gnome')
 makedepends=('python2-distutils-extra')
