@@ -2,19 +2,24 @@
 
 pkgname=geis
 pkgver=2.2.14
-pkgrel=1
+pkgrel=2
 pkgdesc="Gesture Recognition And Instantiation Library"
 arch=('i686' 'x86_64')
 url="https://launchpad.net/geis"
 license=('LGPL')
-depends=('dbus-core' 'grail' 'python2')
-makedepends=('xorg-server-devel')
+depends=('dbus-core' 'grail')
+makedepends=('xorg-server-devel' 'python2')
+optdepends=('python2-gobject2: required for pygeis tool'
+            'pygtk: required for geisview tool')
 options=('!libtool' '!emptydirs')
-source=(https://launchpad.net/geis/trunk/$pkgver/+download/$pkgname-$pkgver.tar.xz)
-md5sums=('a75f07d6d6333a591b5d1060f3b1cdcf')
+source=(https://launchpad.net/geis/trunk/$pkgver/+download/$pkgname-$pkgver.tar.xz
+        python-fix-print-syntax.patch)
+md5sums=('a75f07d6d6333a591b5d1060f3b1cdcf'
+         '0a99e9286306914d74d28ec431791a51')
 
 build() {
   cd "$srcdir/$pkgname-$pkgver"
+  patch -Np1 -i "$srcdir/python-fix-print-syntax.patch"
 
   # Python2 fix
   sed -i 's/python >= 2.7/python-2.7 >= 2.7/' configure

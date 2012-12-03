@@ -1,0 +1,98 @@
+Index: geis-2.2.14/tools/geisview/filter_definition.py
+===================================================================
+--- geis-2.2.14.orig/tools/geisview/filter_definition.py	2012-11-14 09:22:12.567032151 +1100
++++ geis-2.2.14/tools/geisview/filter_definition.py	2012-11-14 09:23:06.007033518 +1100
+@@ -60,7 +60,7 @@
+ class FilterDefinition(object):
+ 
+     def __init__(self):
+-        print "FilterDefinition.__init__() begins"
++        print("FilterDefinition.__init__() begins")
+         builder = gtk.Builder()
+         builder.add_from_file(os.path.join(geisview.defaults.ui_dir,
+                                            "filter_definition.ui"))
+@@ -86,17 +86,17 @@
+ 
+         self._ok_button = builder.get_object("ok_button");
+         self._dialog.show_all()
+-        print "FilterDefinition.__init__() ends"
++        print("FilterDefinition.__init__() ends")
+      
+     def run(self):
+-        print "FilterDefinition.run() begins"
++        print("FilterDefinition.run() begins")
+         response = self._dialog.run()
+         if (response):
+             name = self._name_entry.get_text()
+-            print "FilterDefinition.run() name=%s" % name
+-            print "FilterDefinition.run() facility=%s" % self._facility_store[self._facility_combo.get_active()][facility_combo_value_col]
++            print("FilterDefinition.run() name=%s" % name)
++            print("FilterDefinition.run() facility=%s" % self._facility_store[self._facility_combo.get_active()][facility_combo_value_col])
+         self._dialog.destroy()
+-        print "FilterDefinition.run() ends, response=%s" % response
++        print("FilterDefinition.run() ends, response=%s" % response)
+ 
+     def on_name_changed(self, widget, data=None):
+         name = self._name_entry.get_text()
+@@ -106,7 +106,7 @@
+             self._ok_button.set_sensitive(False)
+         
+     def on_add_term(self, widget, data=None):
+-        print "FilterDefinition.on_add_term()"
++        print("FilterDefinition.on_add_term()")
+         row = self._term_list_store.append()
+         self._term_list_store.set(row,
+                                   0, "<attr name>",
+@@ -114,13 +114,13 @@
+                                   2, "<value>")
+ 
+     def on_edit_term(self, widget, data=None):
+-        print "FilterDefinition.on_edit_term()"
++        print("FilterDefinition.on_edit_term()")
+ 
+     def on_remove_term(self, widget, data=None):
+-        print "FilterDefinition.on_remove_term()"
++        print("FilterDefinition.on_remove_term()")
+ 
+     def on_term_attr_editing_started(self, widget, entry, path, data=None):
+-        print "FilterDefinition.on_term_attr_editing_started()"
++        print("FilterDefinition.on_term_attr_editing_started()")
+         choices = gtk.ListStore(str, str)
+         for c in geis_gesture_terms:
+             choices.append([c, geis.__dict__[c]])
+@@ -133,5 +133,5 @@
+         entry.set_text("")
+ 
+     def on_term_op_edited(self, widget, path, new_text, data=None):
+-        print "FilterDefinition.on_term_op_edited(%s, %s, %s)" % (widget, path, new_text)
++        print("FilterDefinition.on_term_op_edited(%s, %s, %s)" % (widget, path, new_text))
+ 
+Index: geis-2.2.14/tools/geisview/filter_list.py
+===================================================================
+--- geis-2.2.14.orig/tools/geisview/filter_list.py	2012-11-14 09:22:12.567032151 +1100
++++ geis-2.2.14/tools/geisview/filter_list.py	2012-11-14 09:23:06.007033518 +1100
+@@ -43,19 +43,19 @@
+         self._dialog.show_all()
+      
+     def run(self):
+-        print "FilterList.run() begins"
++        print("FilterList.run() begins")
+         response = self._dialog.run()
+         self._dialog.destroy()
+-        print "FilterList.run() ends, response=%s" % response
++        print("FilterList.run() ends, response=%s" % response)
+ 
+     def on_add_filter(self, widget, data=None):
+-        print "FilterList.on_add_filter()"
++        print("FilterList.on_add_filter()")
+         dlg = geisview.filter_definition.FilterDefinition()
+         dlg.run()
+ 
+     def on_edit_filter(self, widget, data=None):
+-        print "FilterList.on_edit_filter()"
++        print("FilterList.on_edit_filter()")
+ 
+     def on_remove_filter(self, widget, data=None):
+-        print "FilterList.on_remove_filter()"
++        print("FilterList.on_remove_filter()")
+ 
