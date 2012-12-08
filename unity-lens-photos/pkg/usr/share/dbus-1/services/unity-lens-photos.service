@@ -1,3 +1,0 @@
-[D-BUS Service]
-Name=net.launchpad.lens.photos
-Exec=/usr/lib/unity-lens-photos/unity-lens-photos
