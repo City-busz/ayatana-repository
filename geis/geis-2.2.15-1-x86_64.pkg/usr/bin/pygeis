@@ -1,0 +1,137 @@
+#!/usr/bin/python3
+#
+# @file pygies
+# @brief a demo/test program for the GEIS python bindings
+#
+# Copyright (C) 2011 Canonical Ltd
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of version 3 of the GNU General Public License as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+
+import argparse
+import geis
+from gi.repository import GLib
+import sys
+
+
+def _print_gesture(attrs):
+    touchset = attrs[geis.GEIS_EVENT_ATTRIBUTE_TOUCHSET]
+    groupset = attrs[geis.GEIS_EVENT_ATTRIBUTE_GROUPSET]
+    print("  touches (" + str(len(touchset)) + "):")
+    for touch in touchset:
+        print("    ", touch.id(), touch.attrs())
+    print("  groups:")
+    for group in groupset:
+        print("    ", group.id(), ":")
+        for frame in group:
+            print("   frame ", frame.id(), ":")
+            for (k, v) in frame.attrs().items():
+                print("      " + k + ":", v)
+            print("      touches: ", frame.touches())
+
+def _do_init_complete(event, sub):
+    print("init complete")
+    sub.activate()
+
+def _do_device_available(event, sub):
+    print("device available")
+
+def _do_gesture_begin(event, sub):
+    print("gesture begin")
+    _print_gesture(event.attrs())
+
+def _do_gesture_update(event, sub):
+    print("gesture update")
+    _print_gesture(event.attrs())
+
+def _do_gesture_end(event, sub):
+    print("gesture end")
+    _print_gesture(event.attrs())
+
+def _do_other_event(event, sub):
+    print("unknown geis event received")
+
+_geis_event_action = {
+    geis.GEIS_EVENT_INIT_COMPLETE:    _do_init_complete,
+    geis.GEIS_EVENT_DEVICE_AVAILABLE: _do_device_available,
+    geis.GEIS_EVENT_GESTURE_BEGIN:    _do_gesture_begin,
+    geis.GEIS_EVENT_GESTURE_UPDATE:   _do_gesture_update,
+    geis.GEIS_EVENT_GESTURE_END:      _do_gesture_end
+}
+
+
+def _dispatch_geis_events(fd, condition, g):
+    """ Performs GEIS event loop processing. """
+    status = g.dispatch_events()
+    while status == geis.GEIS_STATUS_CONTINUE:
+        status = g.dispatch_events()
+
+    try:
+        while True:
+            event = g.next_event()
+            _geis_event_action.get(event.type(), _do_other_event)(event, None)
+    except geis.NoMoreEvents:
+        pass
+    return True
+
+
+def _class_callback(g, event, sub):
+    if event.type() == geis.GEIS_EVENT_CLASS_AVAILABLE:
+        gclass = event.attrs()[geis.GEIS_EVENT_ATTRIBUTE_CLASS]
+        name = gclass.name()
+        print(".. adding class %s" % name)
+        filt = geis.Filter(g, name)
+        filt.add_term(geis.GEIS_FILTER_CLASS,
+                     (geis.GEIS_CLASS_ATTRIBUTE_NAME, geis.GEIS_FILTER_OP_EQ, name),
+                     (geis.GEIS_GESTURE_ATTRIBUTE_TOUCHES, geis.GEIS_FILTER_OP_GT, 2))
+        sub.add_filter(filt)
+
+
+def _event_callback(geis, event, sub):
+    _geis_event_action.get(event.type(), _do_other_event)(event, sub)
+
+
+class Options(argparse.ArgumentParser):
+
+    def __init__(self):
+        argparse.ArgumentParser.__init__(self,
+                                         description="monitor gestures")
+        self.add_argument('-V', '--version', action='version', version='1.0')
+
+
+if __name__ == '__main__':
+    options = Options()
+    try:
+      options.parse_args()
+    except argparse.ArgumentError as ex:
+      print(ex)
+      sys.exit(1)
+
+    g = geis.Geis(geis.GEIS_INIT_TRACK_DEVICES,
+                  geis.GEIS_INIT_TRACK_GESTURE_CLASSES,
+                  geis.GEIS_INIT_SYNCHRONOUS_START)
+    geis_fd = g.get_configuration(geis.GEIS_CONFIGURATION_FD)
+    sub = geis.Subscription(g)
+    g.register_class_callback(_class_callback, sub)
+    g.register_event_callback(_event_callback, sub)
+
+    try:
+      ml = GLib.MainLoop()
+      GLib.io_add_watch(geis_fd, GLib.IO_IN, _dispatch_geis_events, g)
+      ml.run()
+
+    except KeyboardInterrupt:
+      pass
+
+

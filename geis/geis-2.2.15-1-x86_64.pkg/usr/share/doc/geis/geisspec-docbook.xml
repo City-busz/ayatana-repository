@@ -1,0 +1,23 @@
+<copyright>
+  <year>2010</year>
+  <holder>Stephen M. Webb</holder>
+</copyright>
+
+<revhistory>
+  <revision>
+    <revnumber>1.0.0</revnumber>
+    <date>22 July 2010</date>
+    <authorinitials>SMW</authorinitials>
+    <revremark>
+      First release.
+    </revremark>
+  </revision>
+  <revision>
+    <revnumber>1.0.1</revnumber>
+    <date>06 August 2010</date>
+    <authorinitials>SMW</authorinitials>
+    <revremark>
+      Added gesture attribute support functions.
+    </revremark>
+  </revision>
+</revhistory>

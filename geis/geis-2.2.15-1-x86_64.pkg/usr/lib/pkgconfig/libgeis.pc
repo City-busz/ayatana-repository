@@ -1,0 +1,10 @@
+prefix=/usr
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libgeis
+Description: Gesture Engine Implementation Support
+Version: 2.2.15
+Libs: -L${libdir} -lgeis
+Cflags: -I${includedir}

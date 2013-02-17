@@ -1,0 +1,308 @@
+#!/usr/bin/python3
+#
+# @file geisview
+# @brief A viewer for raw GEIS data.
+#
+# This program is a handy diagnostic tool for viewing the raw data produced
+# through the GEIS multi-touch and gesture interface.
+#
+# Copyright (C) 2011 Canonical Ltd
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of version 3 of the GNU General Public License as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+
+
+import argparse
+import geis
+import geisview.defaults
+import geisview.classview
+import geisview.deviceview
+import geisview.filter_list
+from gettext import gettext as _
+import os
+import sys
+
+from gi.repository import Gtk, GLib
+
+_geis_backends = {
+    'dbus':  geis.GEIS_INIT_DBUS_BACKEND,
+    'grail': geis.GEIS_INIT_GRAIL_BACKEND,
+    'mock':  geis.GEIS_INIT_MOCK_BACKEND,
+    'xcb':   geis.GEIS_INIT_XCB_BACKEND,
+}
+
+
+class GeisViewer(object):
+    """Provides a GUI client to display raw GEIS data.
+    """
+
+    def __init__(self, args):
+        self._builder = Gtk.Builder()
+        self._builder.add_from_file(os.path.join(geisview.defaults.ui_dir,
+                                                 "geisview.ui"))
+        self._builder.connect_signals(self)
+        self._args = args;
+
+        self._main_window = self._builder.get_object("main_window")
+        self._filters_dialog = self._builder.get_object("filters_dialog")
+
+        be = _geis_backends.get(args.backend, None)
+        try:
+            if be:
+                self._geis = geis.Geis(geis.GEIS_INIT_TRACK_DEVICES,
+                                       geis.GEIS_INIT_TRACK_GESTURE_CLASSES,
+                                       be)
+            else:
+                self._geis = geis.Geis(geis.GEIS_INIT_TRACK_DEVICES,
+                                       geis.GEIS_INIT_TRACK_GESTURE_CLASSES)
+        except Exception as ex:
+            box = Gtk.MessageDialog(None,
+                                    Gtk.DIALOG_MODAL,
+                                    Gtk.MESSAGE_ERROR,
+                                    Gtk.BUTTONS_CLOSE,
+                                    ex.__str__())
+            box.run()
+            box.destroy()
+            Gtk.main_quit()
+
+        self._geis_event_store = self._builder.get_object("geis_event_store")
+
+        geis_fd = self._geis.get_configuration(geis.GEIS_CONFIGURATION_FD)
+        GLib.io_add_watch(geis_fd, GLib.IO_IN, self._dispatch_geis_events)
+
+        self._classes = {}
+        self._devices = {}
+        self.windowid = int(args.windowid, 0)
+
+        self._sub = geis.Subscription(self._geis)
+        self._main_window.show()
+
+    def _subscribe(self):
+        print("creating subscription")
+        filt = geis.Filter(self._geis, "> 1 touch")
+        filt.add_term(geis.GEIS_FILTER_CLASS,
+            (geis.GEIS_GESTURE_ATTRIBUTE_TOUCHES,
+             geis.GEIS_FILTER_OP_GT,
+             1))
+        if self.windowid:
+            filt.add_term(geis.GEIS_FILTER_REGION,
+                (geis.GEIS_REGION_ATTRIBUTE_WINDOWID,
+                 geis.GEIS_FILTER_OP_EQ,
+                 self.windowid))
+        self._sub.add_filter(filt)
+
+    def gtk_main_quit(self, widget, data=None):
+        Gtk.main_quit()
+
+    def on_menu_item_save(self, widget, data=None):
+        print("on_menu_item_save")
+
+    def on_menu_item_save_as(self, widget, data=None):
+        print("on_menu_item_save_as")
+
+    def on_edit_clear_events_menu_item(self, widget, data=None):
+        self._geis_event_store.clear()
+
+    def on_edit_filters_menu_item_activate(self, widget, data=None):
+        print("on_edit_filters_menu_item_activate")
+        filter_list_dialog = geisview.filter_list.FilterList()
+        filter_list_dialog.run()
+
+    def on_view_classes_menu_item_activate(self, widget, data=None):
+        class_view = geisview.classview.GestureClassView(self._classes)
+
+    def on_view_device_menu_item_activate(self, widget, data=None):
+        device_view = geisview.deviceview.DeviceView(self._devices)
+
+    def on_menu_item_about(self, widget, data=None):
+        about = Gtk.AboutDialog()
+        about.set_transient_for(self._main_window)
+        about.set_name(geisview.defaults.appname)
+        about.set_version(geisview.defaults.version)
+        about.set_copyright(geisview.defaults.copyright)
+        about.set_license(geisview.defaults.license)
+        about.set_wrap_license(True)
+        about.set_comments(geisview.defaults.description)
+        about.set_authors(geisview.defaults.authors)
+        about.set_logo_icon_name("geisview")
+        about.set_translator_credits(geisview.defaults.translator_credit)
+        about.connect("response", lambda d, r: d.destroy())
+        about.show()
+
+    def _detail_touches(self, event_row, touchset):
+        count_label = _("touches: %i") % len(touchset)
+        slot_label = _("touch slot %i")
+        touch_row = self._geis_event_store.append(event_row)
+        self._geis_event_store.set(touch_row, 0, count_label)
+        for touch in touchset:
+            slot_row = self._geis_event_store.append(touch_row)
+            self._geis_event_store.set(slot_row, 0, slot_label % touch.id())
+            for (k, v) in touch.attrs().items():
+                attr_row = self._geis_event_store.append(slot_row)
+                self._geis_event_store.set(attr_row, 0, "%s: %s" % (k, v))
+
+    def _detail_frame(self, group_row, frame):
+        """Extracts and display the details of a gesture frame.
+        """
+        frame_label = _("frame: %i") % frame.id()
+        touch_label = _("touch indexes %s") % frame.touches()
+        class_label = _("classes: %s") % [gc.name() for gc in 
+                filter(frame.is_class, iter(self._classes.values()))]
+
+        dev = None
+
+        frame_row = self._geis_event_store.append(group_row)
+        self._geis_event_store.set(frame_row, 0, frame_label)
+        self._geis_event_store.append(frame_row, [class_label, None, None])
+        for (k, v) in frame.attrs().items():
+            row = self._geis_event_store.append(frame_row)
+            self._geis_event_store.set(row, 0, "%s: %s" % (k, v))
+            if k == geis.GEIS_GESTURE_ATTRIBUTE_DEVICE_ID and v in self._devices:
+                dev = self._devices[v]
+        self._geis_event_store.append(frame_row, [touch_label, None, None])
+
+        if dev:
+            print("device %s extents %s" % (dev.id(), dev.extents()))
+
+
+    def _detail_gesture(self, event_row, attrs):
+        touchset = attrs[geis.GEIS_EVENT_ATTRIBUTE_TOUCHSET]
+        groupset = attrs[geis.GEIS_EVENT_ATTRIBUTE_GROUPSET]
+        self._detail_touches(event_row, touchset)
+        count_label = _("groups: %i") % len(groupset)
+        group_label = _("group %i")
+        it = self._geis_event_store.append(event_row, [count_label, None, None])
+        for group in groupset:
+            group_row = self._geis_event_store.append(it,
+                             [group_label % group.id(), None, None])
+            for frame in group:
+                self._detail_frame(group_row, frame)
+
+    def _detail_gesture_class(self, event_row, gesture_class):
+        for (k, v) in gesture_class.attrs().items():
+            row = self._geis_event_store.append(event_row)
+            self._geis_event_store.set(row, 0, "%s: %s" % (k, v))
+
+    def _detail_device(self, event_row, device):
+        for (k, v) in device.attrs().items():
+            row = self._geis_event_store.append(event_row)
+            self._geis_event_store.set(row, 0, "%s: %s" % (k, v))
+
+    def _do_gesture_begin(self, event):
+        it = self._geis_event_store.append(None)
+        self._geis_event_store.set(it, 0, _("Gesture Begin"))
+        self._detail_gesture(it, event.attrs())
+
+    def _do_gesture_update(self, event):
+        it = self._geis_event_store.append(None)
+        self._geis_event_store.set(it, 0, _("Gesture Update"))
+        self._detail_gesture(it, event.attrs())
+    
+    def _do_gesture_end(self, event):
+        it = self._geis_event_store.append(None)
+        self._geis_event_store.set(it, 0, _("Gesture End"))
+        self._detail_gesture(it, event.attrs())
+    
+    def _do_class_added(self, event):
+        gclass = event.attrs()[geis.GEIS_EVENT_ATTRIBUTE_CLASS]
+        it = self._geis_event_store.append(None)
+        self._classes[gclass.id()] = gclass
+        self._geis_event_store.set(it,
+                0, _("Class %s Added: %s") % (gclass.id(), gclass.name()))
+        self._detail_gesture_class(it, gclass)
+
+    def _do_device_added(self, event):
+        device = event.attrs()[geis.GEIS_EVENT_ATTRIBUTE_DEVICE]
+        self._devices[device.id()] = device
+        it = self._geis_event_store.append(None)
+        self._geis_event_store.set(it,
+                0, _("Device %s Added: %s") % (device.id(), device.name()))
+        self._detail_device(it, device)
+
+    def _do_device_removed(self, event):
+        device = event.attrs()[geis.GEIS_EVENT_ATTRIBUTE_DEVICE]
+        del self._devices[device.id()]
+        it = self._geis_event_store.append(None)
+        self._geis_event_store.set(it,
+                0, _("Device %s Removed: %s") % (device.id(), device.name()))
+
+    def _do_init_complete(self, event):
+        it = self._geis_event_store.append(None)
+        self._geis_event_store.set(it,
+                0, _("GEIS initialization complete"))
+        self._subscribe()
+        self._sub.activate()
+
+    def _do_other_event(self, event):
+        event_label = _("Unknown Event")
+        it = self._geis_event_store.append(None, [event_label, None, None])
+    
+    def _dispatch_geis_events(self, fd, condition):
+        """ Performs GEIS event loop processing. """
+        _geis_event_action = {
+            geis.GEIS_EVENT_GESTURE_BEGIN:      self._do_gesture_begin,
+            geis.GEIS_EVENT_GESTURE_UPDATE:     self._do_gesture_update,
+            geis.GEIS_EVENT_GESTURE_END:        self._do_gesture_end,
+            geis.GEIS_EVENT_CLASS_AVAILABLE:    self._do_class_added,
+            geis.GEIS_EVENT_DEVICE_AVAILABLE:   self._do_device_added,
+            geis.GEIS_EVENT_DEVICE_UNAVAILABLE: self._do_device_removed,
+            geis.GEIS_EVENT_INIT_COMPLETE:      self._do_init_complete
+        }
+    
+        status = self._geis.dispatch_events()
+        while status == geis.GEIS_STATUS_CONTINUE:
+            status = self._geis.dispatch_events()
+
+        try:
+            while True:
+                event = self._geis.next_event()
+                _geis_event_action.get(event.type(), self._do_other_event)(event)
+        except geis.NoMoreEvents:
+            pass
+        return True
+
+
+class Options(argparse.ArgumentParser):
+    """Handles the geisviewer command-line arguments.
+    """
+
+    def __init__(self):
+        argparse.ArgumentParser.__init__(self,
+                                         description="monitor gestures")
+        self.add_argument('-V', '--version', action='version', version='1.0')
+        self.add_argument('-w', '--window',  action='store', dest='windowid',
+                          default = "0",
+                          help=_('indicates the X windowid to receive input'))
+        self.add_argument('-b', '--backend', action='store', dest='backend',
+                          choices=list(_geis_backends.keys()), default=None,
+                          help=_('selects the recognizer back end'))
+
+
+def main():
+    windowid = None
+    options = Options()
+    try:
+        args = options.parse_args()
+        if args.windowid:
+            windowid = int(args.windowid, 0)
+    except argparse.ArgumentError as ex:
+        print(ex)
+        sys.exit(1)
+
+    geis_viewer = GeisViewer(args)
+    Gtk.main()
+
+
+if __name__ == '__main__':
+    main()
