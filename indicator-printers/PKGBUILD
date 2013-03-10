@@ -2,7 +2,7 @@
 
 pkgname=indicator-printers
 pkgver=0.1.6
-pkgrel=2
+pkgrel=3
 pkgdesc="An indicator which shows active print jobs"
 arch=('i686' 'x86_64')
 url="https://launchpad.net/indicator-printers"
