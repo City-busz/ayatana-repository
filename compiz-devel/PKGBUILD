@@ -17,7 +17,7 @@ source=(https://launchpad.net/compiz/${pkgver%.*}/$pkgver/+download/$_pkgname-$p
         http://pkgbuild.com/~bgyorgy/sources/$_pkgname-translations-20130310.tar.gz
         http://pkgbuild.com/~bgyorgy/sources/ccsm-translations-20130310.tar.gz
         boost-fix-build.patch
-        transparent_desktop_windows.patch
+        transparent-desktop-windows.patch
         ubuntu-config.patch
         fix-gschema.patch
         default-plugins.patch
@@ -26,7 +26,7 @@ md5sums=('43f16a1990abb50fad00ff5e51cb98af'
          '0a6d7abc738b77d82ffb3dd39eb40939'
          'ca0e8a5b5b4363aa587fcb6022c4feec'
          'f824bcb07583906602834c75562fa31b'
-         'c94d8faf1c4acdfc2c119fd0c9903a80'
+         'bca303bc8a8700b4372555f7c32e3602'
          '5b084c9d10236ca83edac1fe07a4c0d0'
          'e72391ee27c82dc36ab80db8fa27d151'
          '4215d60ee03fbba4632364645d93a006'
@@ -46,9 +46,8 @@ build() {
   # Fix build with boost 1.53
   patch -Np1 -i "$srcdir/boost-fix-build.patch"
 
-
   # Add support for transparent desktop windows (required for nautilus 3.8)
-  patch -Np1 -i "$srcdir/transparent_desktop_windows.patch"
+  patch -Np1 -i "$srcdir/transparent-desktop-windows.patch"
 
   # Apply Ubuntu settings, because it fixes various problems
   patch -Np1 -i "$srcdir/ubuntu-config.patch"
